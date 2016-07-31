@@ -150,6 +150,11 @@ int main(int argc, char **argv)
 	{\
 		color: orange;\
 	}\
+	a, a:visited, a:hover, a:active \
+	{\
+  		color: inherit;\
+  		text-decoration: none;\
+	}\
 	";
 
 	XMLElement *style = doc.NewElement("style");
@@ -202,7 +207,7 @@ int main(int argc, char **argv)
 				std::string &arg = (arg2 != "") ? arg2 : arg1;
 				if(strip_arg(arg))
 				{
-					int t = strtoul(arg1.c_str(), nullptr, 16);
+					int t = strtoul(arg.c_str(), nullptr, 16);
 					xrefs[addr]["branch"] = t;
 					if(rev_xrefs.find(t) == rev_xrefs.end())
 					{
@@ -216,18 +221,9 @@ int main(int argc, char **argv)
 
 	for(auto instr : instrs)
 	{
-		/*XMLText *space1 = doc.NewText(" ");
-		XMLText *space2 = doc.NewText(" ");
-		XMLText *space3 = doc.NewText(" ");
-		XMLText *space4 = doc.NewText(", ");*/
 		XMLElement *line = doc.NewElement("tr");
+		line->SetAttribute("id", std::to_string(instr.addr).c_str());
 		line->SetAttribute("class", "line");
-
-		/*XMLElement *line_anchor = doc.NewElement("a");
-		line_anchor->SetAttribute("name", addr.c_str());
-		XMLText *fuck_you_html = doc.NewText("");
-		line_anchor->InsertFirstChild(fuck_you_html);
-		line->InsertFirstChild(line_anchor);*/
 
 		std::string a = string_sprintf("%08x", instr.addr);
 		XMLElement *line_addr = col(doc, a, "addr");
@@ -243,27 +239,34 @@ int main(int argc, char **argv)
 		line->InsertAfterChild(line_bytes, line_op);
 		line_op->InsertFirstChild(line_op_span);
 
+		XMLElement *line_arg1 = nullptr;
+		XMLElement *line_arg2 = nullptr;
+
 		if(instr.arg1 != "")
 		{
 			XMLText *space = doc.NewText(", ");
-			XMLElement *line_arg1 = span(doc, instr.arg1, "arg1");
+			line_arg1 = span(doc, instr.arg1, "arg1");
 			line_op->InsertAfterChild(line_op_span, line_arg1);
 
 			if(instr.arg2 != "")
 			{
 				line_op->InsertAfterChild(line_arg1, space);
-				XMLElement *line_arg2 = span(doc, instr.arg2, "arg2");
+				line_arg2 = span(doc, instr.arg2, "arg2");
 				line_op->InsertAfterChild(space, line_arg2);
 			}
 		}
 
+		std::string xref_link;
+
 		if(xrefs.find(instr.addr) != xrefs.end())
 		{
+			// dubious af code
 			std::string info = "{";
 			for(auto pair : xrefs[instr.addr])
 			{
 				info += "\"" + pair.first + "\" : ";
 				info += std::to_string(pair.second);
+				xref_link = "#" + std::to_string(pair.second);
 			}
 			info += "}";
 
@@ -320,9 +323,22 @@ int main(int argc, char **argv)
 			add_class(line, "ret");
 		}
 
-		table->InsertEndChild(line);
-		/*XMLElement *br = doc.NewElement("br");
-		body->InsertEndChild(br);*/
+		if(xref_link == "")
+		{
+			table->InsertEndChild(line);
+		}
+		else
+		{
+			XMLElement *a = line_arg1;
+			if(instr.op == "bf" || instr.op == "bt")
+			{
+				a = line_arg2;
+			}
+			a->SetName("a");
+			a->SetAttribute("href", xref_link.c_str());
+
+			table->InsertEndChild(line);
+		}
 	}
 
 	doc.SaveFile(argv[2]);
