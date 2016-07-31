@@ -18,8 +18,7 @@ struct Instr
 	std::string arg1;
 	std::string arg2;
 
-	bool indirect;
-	bool imm;
+	bool branch;
 };
 
 // http://stackoverflow.com/questions/216823/whats-the-best-way-to-trim-stdstring
@@ -81,6 +80,24 @@ void add_class(XMLElement *e, std::string to_add)
 	e->SetAttribute("class", curclass.c_str());
 }
 
+bool strip_arg(std::string &arg)
+{
+	bool imm = false;
+	while(true)
+	{
+		if(arg.substr(0,1) == "!" || arg.substr(0, 1) == "$")
+		{
+			imm = true;
+			arg = arg.substr(1);
+		}
+		else
+		{
+			break;
+		}
+	}
+	return imm;
+}
+
 int main(int argc, char **argv)
 {
 	if(argc < 3)
@@ -117,13 +134,21 @@ int main(int argc, char **argv)
 	{\
 		color: red;\
 	}\
-	.caller\
+	.call\
 	{\
 		color: blue;\
 	}\
 	.ret\
 	{\
 		color: green;\
+	}\
+	.branch\
+	{\
+		color: purple;\
+	}\
+	.branch-target\
+	{\
+		color: orange;\
 	}\
 	";
 
@@ -139,8 +164,8 @@ int main(int argc, char **argv)
 	body->InsertFirstChild(table);
 
 	std::vector<Instr> instrs;
-	std::map<int, int> call_targets;
-	std::map<int, std::set<int>> call_targets_rev;
+	std::map<int, std::map<std::string, int>> xrefs;
+	std::map<int, std::map<std::string, std::set<int>>> rev_xrefs;
 
 	std::string s;
 	while(std::getline(f, s))
@@ -158,39 +183,35 @@ int main(int argc, char **argv)
 			instrs.push_back(Instr {addr, bytes, op, arg1, arg2});
 			if(op == "call")
 			{
-				bool imm = false;
-
-				while(true)
-				{
-					if(arg1.substr(0,1) == "!" || arg1.substr(0, 1) == "$")
-					{
-						imm = true;
-						arg1 = arg1.substr(1);
-					}
-					else
-					{
-						break;
-					}
-				}
-
-				if(imm)
+				if(strip_arg(arg1))
 				{
 					int t = strtoul(arg1.c_str(), nullptr, 16);
-					call_targets[addr] = t;
+					xrefs[addr]["call"] = t;
 
-					if(call_targets_rev.find(t) == call_targets_rev.end())
+					if(rev_xrefs.find(t) == rev_xrefs.end())
 					{
-						call_targets_rev[t] = std::set<int>();
+						rev_xrefs[t] = std::map<std::string, std::set<int>>();
 					}
-					call_targets_rev[t].insert(addr);
+					rev_xrefs[t]["call"].insert(addr);
+				}
+			}
+			else if(op == "br" || op == "bz" || op == "bnz" || op == "bt" || op == "bf")
+			{
+				instrs.back().branch = true;
+
+				std::string &arg = (arg2 != "") ? arg2 : arg1;
+				if(strip_arg(arg))
+				{
+					int t = strtoul(arg1.c_str(), nullptr, 16);
+					xrefs[addr]["branch"] = t;
+					if(rev_xrefs.find(t) == rev_xrefs.end())
+					{
+						rev_xrefs[t] = std::map<std::string, std::set<int>>();
+					}
+					rev_xrefs[t]["branch"].insert(addr);
 				}
 			}
 		}
-	}
-
-	for(auto p : call_targets)
-	{
-		//printf("%04x => %04x\n", p.first, p.second);
 	}
 
 	for(auto instr : instrs)
@@ -236,24 +257,62 @@ int main(int argc, char **argv)
 			}
 		}
 
-		if(call_targets.find(instr.addr) != call_targets.end())
+		if(xrefs.find(instr.addr) != xrefs.end())
 		{
-			add_class(line, "caller");
-			line->SetAttribute("data-caller-info", std::to_string(call_targets[instr.addr]).c_str());
+			std::string info = "{";
+			for(auto pair : xrefs[instr.addr])
+			{
+				info += "\"" + pair.first + "\" : ";
+				info += std::to_string(pair.second);
+			}
+			info += "}";
+
+			if(instr.branch)
+			{
+				add_class(line, "branch");
+			}
+			else
+			{
+				add_class(line, "call");
+			}
+			
+			line->SetAttribute("data-xref-info", info.c_str());
 		}
 		
-		if(call_targets_rev.find(instr.addr) != call_targets_rev.end())
+		// no we can't use auto here. :(
+		std::map<int, std::map<std::string, std::set<int>>>::iterator rev_xref_it;
+		if((rev_xref_it = rev_xrefs.find(instr.addr)) != rev_xrefs.end())
 		{
-			add_class(line, "callee");
-			std::string s = "[";
-			for(auto a : call_targets_rev[instr.addr])
+			if(rev_xref_it->second.find("call") != rev_xref_it->second.end())
 			{
-				s += std::to_string(a) + ", ";
+				add_class(line, "callee");
+			}
+			else if(rev_xref_it->second.find("branch") != rev_xref_it->second.end())
+			{
+				add_class(line, "branch-target");
 			}
 
-			s = s.substr(0, s.length()-2);
-			s += "]";
-			line->SetAttribute("data-callee-info", s.c_str());
+			std::string info = "{";
+
+			for(auto pair : rev_xrefs[instr.addr])
+			{
+				info += "\"" + pair.first + "\" : [";
+				for(auto a : pair.second)
+				{
+					info += std::to_string(a) + ", ";
+				}
+				info = info.substr(0, info.length()-2);
+				info += "], ";
+			}
+			info = info.substr(0, info.length()-2);
+			info += "}";
+
+			line->SetAttribute("data-rev-xref-info", info.c_str());
+		}
+
+		if(instr.branch)
+		{
+			add_class(line, "branch");
 		}
 
 		if(instr.op == "ret")
