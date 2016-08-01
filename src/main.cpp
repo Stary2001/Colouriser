@@ -129,6 +129,7 @@ int main(int argc, char **argv)
 		font-family: monospace;\
 		padding-top: 0;\
 		padding-bottom: 0;\
+		vertical-align: top;\
 	}\
 	.callee\
 	{\
@@ -141,6 +142,7 @@ int main(int argc, char **argv)
 	.ret\
 	{\
 		color: green;\
+		height: 2em;\
 	}\
 	.branch\
 	{\
@@ -175,7 +177,7 @@ int main(int argc, char **argv)
 	std::string s;
 	while(std::getline(f, s))
 	{
-		std::smatch m; 
+		std::smatch m;
 		if(std::regex_match(s, m, r))
 		{
 			std::string addr_s = "0x" + trim(m[1].str());
@@ -278,10 +280,10 @@ int main(int argc, char **argv)
 			{
 				add_class(line, "call");
 			}
-			
+
 			line->SetAttribute("data-xref-info", info.c_str());
 		}
-		
+
 		// no we can't use auto here. :(
 		std::map<int, std::map<std::string, std::set<int>>>::iterator rev_xref_it;
 		if((rev_xref_it = rev_xrefs.find(instr.addr)) != rev_xrefs.end())
