@@ -70,6 +70,8 @@ struct Instr_Q_Data
 	Sub::ptr c_sub;
 	Segment::ptr c_segment;
 	Segment::ptr c_from_segment;
+
+	typedef std::shared_ptr<Instr_Q_Data> ptr;
 };
 
 // http://stackoverflow.com/questions/216823/whats-the-best-way-to-trim-stdstring
@@ -149,9 +151,9 @@ bool strip_arg(std::string &arg)
 	return imm;
 }
 
-void process_inst(std::vector<Instr>& insts, std::list<Instr_Q_Data*>& insts_queue)
+void process_inst(std::vector<Instr>& insts, std::list<Instr_Q_Data::ptr>& insts_queue)
 {
-	Instr_Q_Data* inst_data = insts_queue.back();
+	Instr_Q_Data::ptr inst_data = insts_queue.back();
 	insts_queue.pop_back();
 
 	Instr* c_inst = inst_data->c_inst;
@@ -270,7 +272,7 @@ void process_inst(std::vector<Instr>& insts, std::list<Instr_Q_Data*>& insts_que
 					if(c_inst->unc_branch)
 						no_link_to_next = true;
 
-					insts_queue.push_back(nq_data);
+					insts_queue.push_back(Instr_Q_Data::ptr(nq_data));
 					break;
 				}
 			}
@@ -289,7 +291,7 @@ void process_inst(std::vector<Instr>& insts, std::list<Instr_Q_Data*>& insts_que
 			}
 			nq_data->c_from_segment = c_segment;
 			nq_data->c_sub = c_sub;
-			insts_queue.push_back(nq_data);
+			insts_queue.push_back(Instr_Q_Data::ptr(nq_data));
 		}
 	}
 }
@@ -304,8 +306,8 @@ int main(int argc, char **argv)
 	
 	std::string out_fname = argv[2];
 	
-	std::regex r("^\\s+.data:([0-9A-Fa-f]+)\\s+([0-9A-Fa-f\\s]{2,32})\\s+([A-Za-z0-9]+)(?:\\s([^,]+))?(?:,\\s*(.+))?");
-	//std::regex r("^ +(\\w+):\\t([\\w ]+)\\t([\\w]+)(?:\\s([^,]+))?(?:,\\s*(.+))?"); todo option maybe?
+	//std::regex r("^\\s+.data:([0-9A-Fa-f]+)\\s+([0-9A-Fa-f\\s]{2,32})\\s+([A-Za-z0-9]+)(?:\\s([^,]+))?(?:,\\s*(.+))?");
+	std::regex r("^ +(\\w+):\\t([\\w ]+)\\t([\\w]+)(?:\\s([^,]+))?(?:,\\s*(.+))?"); // todo option maybe?
 	std::ifstream f(argv[1]);
 	if(!f.good())
 	{
@@ -587,7 +589,7 @@ int main(int argc, char **argv)
 		printf("Sub : 0x%04x\n", sub->addr_start);
 		fflush(stdout);
 
-		std::list<Instr_Q_Data*> insts_queue;
+		std::list<Instr_Q_Data::ptr> insts_queue;
 
 		auto res = std::find_if(instrs.begin(), instrs.end(), [sub](const Instr& instr){
 			return instr.addr == sub->addr_start;
@@ -599,7 +601,7 @@ int main(int argc, char **argv)
 			nq_data->c_inst = &*res;
 			nq_data->c_sub = sub;
 
-			insts_queue.push_back(nq_data);
+			insts_queue.push_back(Instr_Q_Data::ptr(nq_data));
 			while(!insts_queue.empty())
 			{
 				process_inst(instrs, insts_queue);
