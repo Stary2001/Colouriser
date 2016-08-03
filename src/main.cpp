@@ -7,6 +7,11 @@
 #include <algorithm>
 #include <cassert>
 #include <set>
+#include <map>
+
+#if __GNUC__ < 5
+	#error Use a less ancient compiler. God damn.
+#endif
 
 using namespace tinyxml2;
 
@@ -221,6 +226,9 @@ int main(int argc, char **argv)
 		}
 	}
 
+	bool opt_argTd = true;
+	bool opt_bytes = true;
+
 	for(auto instr : instrs)
 	{
 		XMLElement *line = doc.NewElement("tr");
@@ -232,13 +240,16 @@ int main(int argc, char **argv)
 		//line->InsertAfterChild(line_anchor, line_addr);
 		line->InsertFirstChild(line_addr);
 
-		XMLElement *line_bytes = col(doc, instr.bytes, "bytes");
-		line->InsertAfterChild(line_addr, line_bytes);
+		if(opt_bytes)
+		{
+			XMLElement *line_bytes = col(doc, instr.bytes, "bytes");
+			line->InsertEndChild(line_bytes);
+		}
 
 		XMLElement *line_op = doc.NewElement("td");
 		line_op->SetAttribute("class", "pre");
 		XMLElement *line_op_span = span(doc, instr.op, "op");
-		line->InsertAfterChild(line_bytes, line_op);
+		line->InsertEndChild(line_op);
 		line_op->InsertFirstChild(line_op_span);
 
 		XMLElement *line_arg1 = nullptr;
@@ -248,13 +259,32 @@ int main(int argc, char **argv)
 		{
 			XMLText *space = doc.NewText(", ");
 			line_arg1 = span(doc, instr.arg1, "arg1");
-			line_op->InsertAfterChild(line_op_span, line_arg1);
+
+			XMLElement *arg_td;
+			if(opt_argTd)
+			{
+				arg_td = doc.NewElement("td");
+				arg_td->InsertFirstChild(line_arg1);
+				line->InsertEndChild(arg_td);
+			}
+			else
+			{
+				line_op->InsertEndChild(line_arg1);
+			}
 
 			if(instr.arg2 != "")
 			{
-				line_op->InsertAfterChild(line_arg1, space);
 				line_arg2 = span(doc, instr.arg2, "arg2");
-				line_op->InsertAfterChild(space, line_arg2);
+				if(opt_argTd)
+				{
+					arg_td->InsertEndChild(space);
+					arg_td->InsertEndChild(line_arg2);
+				}
+				else
+				{
+					line_op->InsertEndChild(space);
+					line_op->InsertEndChild(line_arg2);
+				}
 			}
 		}
 
