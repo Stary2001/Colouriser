@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cassert>
 #include <set>
+#include <memory>
+#include <vector>
+#include <list>
 #include <map>
 
 #if __GNUC__ < 5
@@ -15,15 +18,58 @@
 
 using namespace tinyxml2;
 
+struct Segment;
+
 struct Instr
 {
-	int addr;
+	uint32_t addr;
 	std::string bytes;
 	std::string op;
 	std::string arg1;
 	std::string arg2;
 
 	bool branch;
+	bool unc_branch; // unconditional branch
+
+	uint32_t idx;
+	Segment* segment;
+	typedef std::shared_ptr<Instr> ptr;
+};
+
+struct Segment
+{
+	uint32_t addr_start;
+	uint32_t addr_end;
+
+	std::vector<Segment*> branch_to; // at most two branches out
+
+	std::vector<Instr*> insts;
+	typedef std::shared_ptr<Segment> ptr;
+
+	void link_to(Segment* to)
+	{
+		if(!to)
+			return;
+
+		branch_to.push_back(to);
+	}
+};
+
+struct Sub
+{
+	uint32_t addr_start;
+	uint32_t addr_end;
+
+	std::vector<Segment::ptr> segments;
+	typedef std::shared_ptr<Sub> ptr;
+};
+
+struct Instr_Q_Data
+{
+	Instr* c_inst;
+	Sub::ptr c_sub;
+	Segment::ptr c_segment;
+	Segment::ptr c_from_segment;
 };
 
 // http://stackoverflow.com/questions/216823/whats-the-best-way-to-trim-stdstring
@@ -103,15 +149,163 @@ bool strip_arg(std::string &arg)
 	return imm;
 }
 
+void process_inst(std::vector<Instr>& insts, std::list<Instr_Q_Data*>& insts_queue)
+{
+	Instr_Q_Data* inst_data = insts_queue.back();
+	insts_queue.pop_back();
+
+	Instr* c_inst = inst_data->c_inst;
+	Sub::ptr c_sub = inst_data->c_sub;
+	Segment::ptr c_segment = inst_data->c_segment;
+
+	if(c_inst->segment)
+	{
+		if(c_inst->segment->addr_start != c_inst->addr)
+		{
+			// Split
+			Segment::ptr n_segment = Segment::ptr(new Segment);
+			Segment* o_segment = c_inst->segment;
+			n_segment->addr_start = c_inst->addr;
+			n_segment->addr_end = o_segment->addr_end;
+
+			std::vector<Instr*> insts_copy = o_segment->insts;
+			o_segment->insts.clear();
+
+			auto n_start = std::find(insts_copy.begin(), insts_copy.end(), c_inst);
+			auto n_end = n_start - 1;
+			o_segment->addr_end = (*n_end)->addr;
+
+			o_segment->insts = std::vector<Instr*>(insts_copy.begin(), n_start);
+			n_segment->insts = std::vector<Instr*>(n_start, insts_copy.end());
+
+			for(auto t_inst : n_segment->insts)
+			{
+				t_inst->segment = n_segment.get();
+			}
+
+			// set the branching
+			n_segment->branch_to = o_segment->branch_to;
+			o_segment->branch_to.clear();
+
+			o_segment->link_to(n_segment.get());
+			if(inst_data->c_from_segment.get() == o_segment)
+			{
+				// self loop
+				if(c_segment.get() == nullptr)
+				{
+					n_segment->link_to(n_segment.get());
+				}
+			}
+			else
+			{
+				inst_data->c_from_segment->link_to(n_segment.get());
+			}
+
+			c_sub->segments.push_back(n_segment);
+
+			// go through the queue and fix up pointers
+			for(auto qdata : insts_queue)
+			{
+				if(qdata->c_from_segment.get() == o_segment)
+				{
+					qdata->c_from_segment = n_segment;
+					printf("fix up\n");
+				}
+			}
+		}
+		else
+		{
+			if(inst_data->c_from_segment.get())
+			{
+				inst_data->c_from_segment->link_to(c_inst->segment);
+			}
+		}
+		return;
+	}
+
+	uint32_t addr = c_inst->addr;
+	c_sub->addr_end = addr;
+
+	if(c_segment.get() == nullptr || c_sub->segments.empty())
+	{
+		printf("New segment\n");
+		c_sub->segments.push_back(Segment::ptr(new Segment));
+		c_segment = c_sub->segments.back();
+		c_segment->addr_start = addr;
+
+		if(inst_data->c_from_segment.get())
+		{
+			inst_data->c_from_segment->link_to(c_segment.get());
+		}
+	}
+	c_segment->addr_end = addr;
+
+	c_inst->segment = c_segment.get();
+	c_segment->insts.push_back(c_inst);
+	bool has_branch = false;
+	bool no_link_to_next = false;
+	if(c_inst->branch)
+	{
+		uint32_t b_addr = 0;
+
+		if(c_inst->op == "bf" || c_inst->op == "br")
+			b_addr = strtoul(c_inst->arg2.c_str() + 3, nullptr, 16);
+		else
+			b_addr = strtoul(c_inst->arg1.c_str() + 3, nullptr, 16);
+
+		if(b_addr)
+		{
+			has_branch = true;
+
+			for(auto& t_inst : insts)
+			{
+				if(t_inst.addr == b_addr)
+				{
+					printf(" Branch addr : %08X\n", b_addr);
+					Instr_Q_Data* nq_data = new Instr_Q_Data;
+					nq_data->c_inst = &t_inst;
+					nq_data->c_sub = c_sub;
+					nq_data->c_from_segment = c_segment;
+
+					if(c_inst->unc_branch)
+						no_link_to_next = true;
+
+					insts_queue.push_back(nq_data);
+					break;
+				}
+			}
+		}
+	}
+
+	if(!no_link_to_next && (c_inst->idx + 1) < insts.size())
+	{
+		if(insts[c_inst->idx + 1].op != "ret")
+		{
+			Instr_Q_Data* nq_data = new Instr_Q_Data;
+			nq_data->c_inst = &insts[c_inst->idx + 1];
+			if(!has_branch)
+			{
+				nq_data->c_segment = c_segment;
+			}
+			nq_data->c_from_segment = c_segment;
+			nq_data->c_sub = c_sub;
+			insts_queue.push_back(nq_data);
+		}
+	}
+}
+
 int main(int argc, char **argv)
 {
 	if(argc < 3)
 	{
 		printf("usage: %s [fw filename] [out filename]\n", argv[0]);
-		return 1;
+		return 0;
 	}
-
+	
+	std::string out_fname = argv[2];
+	
 	std::regex r("^\\s+.data:([0-9A-Fa-f]+)\\s+([0-9A-Fa-f\\s]{2,32})\\s+([A-Za-z0-9]+)(?:\\s([^,]+))?(?:,\\s*(.+))?");
+	//std::regex r("^ +(\\w+):\\t([\\w ]+)\\t([\\w]+)(?:\\s([^,]+))?(?:,\\s*(.+))?"); todo option maybe?
 	std::ifstream f(argv[1]);
 	if(!f.good())
 	{
@@ -179,6 +373,7 @@ int main(int argc, char **argv)
 	std::map<int, std::map<std::string, int>> xrefs;
 	std::map<int, std::map<std::string, std::set<int>>> rev_xrefs;
 
+	std::vector<Sub::ptr> subs;
 	std::string s;
 	while(std::getline(f, s))
 	{
@@ -186,30 +381,43 @@ int main(int argc, char **argv)
 		if(std::regex_match(s, m, r))
 		{
 			std::string addr_s = "0x" + trim(m[1].str());
-			int addr = strtoul(addr_s.c_str(), nullptr, 16);
+			uint32_t addr = strtoul(addr_s.c_str(), nullptr, 16);
 			std::string bytes = trim(m[2].str());
 			std::string op =    trim(m[3].str());
 			std::string arg1 =  trim(m[4].str());
 			std::string arg2 =  trim(m[5].str());
 
-			instrs.push_back(Instr {addr, bytes, op, arg1, arg2});
+			instrs.push_back(Instr {addr, bytes, op, arg1, arg2, false, false, (uint32_t)instrs.size()});
+
+			if(subs.empty())
+			{
+				subs.push_back(Sub::ptr(new Sub));
+				subs.back()->addr_start = addr;
+			}
+
 			if(op == "call")
 			{
 				if(strip_arg(arg1))
 				{
-					int t = strtoul(arg1.c_str(), nullptr, 16);
+					uint32_t t = strtoul(arg1.c_str(), nullptr, 16);
 					xrefs[addr]["call"] = t;
 
 					if(rev_xrefs.find(t) == rev_xrefs.end())
 					{
 						rev_xrefs[t] = std::map<std::string, std::set<int>>();
+
+						subs.push_back(Sub::ptr(new Sub));
+						subs.back()->addr_start = t;
 					}
 					rev_xrefs[t]["call"].insert(addr);
 				}
 			}
-			else if(op == "br" || op == "bz" || op == "bnz" || op == "bt" || op == "bf")
+			else if(op == "br" || op == "bz" || op == "bnz" || op == "bt" || op == "bf"
+			|| op == "bh" || op == "bnh" || op == "bc" || op == "bnc")
 			{
 				instrs.back().branch = true;
+				if(op == "br")
+					instrs.back().unc_branch = true;
 
 				std::string &arg = (arg2 != "") ? arg2 : arg1;
 				if(strip_arg(arg))
@@ -372,6 +580,56 @@ int main(int argc, char **argv)
 			table->InsertEndChild(line);
 		}
 	}
+	doc.SaveFile(out_fname.c_str());
 
-	doc.SaveFile(argv[2]);
+	for(auto sub : subs)
+	{
+		printf("Sub : 0x%04x\n", sub->addr_start);
+		fflush(stdout);
+
+		std::list<Instr_Q_Data*> insts_queue;
+
+		auto res = std::find_if(instrs.begin(), instrs.end(), [sub](const Instr& instr){
+			return instr.addr == sub->addr_start;
+		});
+
+		if(res != instrs.end())
+		{
+			Instr_Q_Data* nq_data = new Instr_Q_Data;
+			nq_data->c_inst = &*res;
+			nq_data->c_sub = sub;
+
+			insts_queue.push_back(nq_data);
+			while(!insts_queue.empty())
+			{
+				process_inst(instrs, insts_queue);
+			}
+
+			char tfname[0x100];
+			sprintf(tfname, "0x%04x.dot", sub->addr_start);
+
+			FILE* dotfile = fopen(tfname, "w+b");
+			fprintf(dotfile, "digraph name {\n");
+			fprintf(dotfile, "\tgraph [fontname = \"courier\"];\n");
+			fprintf(dotfile, "\tnode [fontname = \"courier\"];\n");
+			fprintf(dotfile, "\tedge [fontname = \"courier\"];\n");
+			for(auto s : sub->segments)
+			{
+				fprintf(dotfile, "\tf%04x[label=\"{0x%04x|", s->addr_start, s->addr_start);
+
+				for(auto insts : s->insts)
+				{
+					fprintf(dotfile, "%s %s%s%s\\l", insts->op.c_str(), insts->arg1.c_str(), insts->arg2.length() ? ", " : "", insts->arg2.c_str());
+				}
+
+				fprintf(dotfile, "}\" shape=record]\n");
+				for(auto bst : s->branch_to)
+				{
+					fprintf(dotfile, "\tf%04x -> f%04x\n", s->addr_start, bst->addr_start);
+				}
+			}
+			fprintf(dotfile, "}\n");
+			fclose(dotfile);
+		}
+	}
 }
