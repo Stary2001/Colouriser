@@ -309,11 +309,9 @@ int main(int argc, char **argv)
 		printf("usage: %s [fw filename] [out filename]\n", argv[0]);
 		return 0;
 	}
-	
+
 	std::string out_fname = argv[2];
-	
-	//std::regex r("^\\s+.data:([0-9A-Fa-f]+)\\s+([0-9A-Fa-f\\s]{2,32})\\s+([A-Za-z0-9]+)(?:\\s([^,]+))?(?:,\\s*(.+))?");
-	std::regex r("^ +(\\w+):\\t([\\w ]+)\\t([\\w]+)(?:\\s([^,]+))?(?:,\\s*(.+))?"); // todo option maybe?
+
 	std::ifstream f(argv[1]);
 	if(!f.good())
 	{
@@ -383,8 +381,35 @@ int main(int argc, char **argv)
 
 	std::vector<Sub::ptr> subs;
 	std::string s;
+
+	std::regex oda_regex("^\\s+.data:([0-9A-Fa-f]+)\\s+([0-9A-Fa-f\\s]{2,32})\\s+([A-Za-z0-9]+)(?:\\s([^,]+))?(?:,\\s*(.+))?");
+	std::regex objdump_regex("^ +(\\w+):\\t([\\w ]+)\\t([\\w]+)(?:\\s([^,]+))?(?:,\\s*(.+))?");
+
+	bool picked = false;
+	std::regex r;
+
 	while(std::getline(f, s))
 	{
+		// *shakes fist at whoever decided crlf newlines were a good idea*
+		if(s.substr(s.length()-1, 1) == "\r")
+		{
+			s = s.substr(0, s.length()-1);
+		}
+
+		if(!picked)
+		{
+			if(s.find(".data") != std::string::npos)
+			{
+				r = oda_regex;
+			}
+			else
+			{
+				r = objdump_regex;
+			}
+
+			picked = true;
+		}
+
 		std::smatch m;
 		if(std::regex_match(s, m, r))
 		{
