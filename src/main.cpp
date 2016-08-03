@@ -293,6 +293,12 @@ void process_inst(std::vector<Instr>& insts, std::list<Instr_Q_Data::ptr>& insts
 			nq_data->c_sub = c_sub;
 			insts_queue.push_back(Instr_Q_Data::ptr(nq_data));
 		}
+		else
+		{
+			c_inst = &insts[c_inst->idx + 1];
+			c_segment->addr_end = c_inst->addr;
+			c_segment->insts.push_back(c_inst);
+		}
 	}
 }
 
@@ -632,6 +638,15 @@ int main(int argc, char **argv)
 			}
 			fprintf(dotfile, "}\n");
 			fclose(dotfile);
+
+			// Clean up
+			for(auto segment : sub->segments)
+			{
+				for(auto inst : segment->insts)
+				{
+					inst->segment = nullptr;
+				}
+			}
 		}
 	}
 }
