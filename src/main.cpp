@@ -638,6 +638,15 @@ int main(int argc, char **argv)
 			}
 			fprintf(dotfile, "}\n");
 			fclose(dotfile);
+
+			// Clean up
+			for(auto segment : sub->segments)
+			{
+				for(auto inst : segment->insts)
+				{
+					inst->segment = nullptr;
+				}
+			}
 		}
 	}
 }
